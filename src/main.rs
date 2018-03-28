@@ -13,10 +13,12 @@ use serde_json::Value;
 
 use std::io::prelude::*;
 use std::fs::File;
+use std::path::Path;
 
 use std::collections::HashMap;
 
 use regex::Regex;
+use regex::Captures;
 
 /*
 Load file at a file path to a string.
@@ -210,7 +212,7 @@ fn string_to_code_line(s: String) -> ContractElement {
     return def;
 }
 
-fn generate_global_elements(parse: &Value) -> Vec<ContractElement> {
+fn generate_global_elements(parse: &Value, type_map: HashMap<String, String>) -> Vec<ContractElement> {
     let mut ret = Vec::new();
 
     let inst_name = institution_name_to_string(parse);
@@ -225,34 +227,60 @@ fn generate_global_elements(parse: &Value) -> Vec<ContractElement> {
     create_contract.remove(0);
     create_contract.trim();
 
-    //Create permission and power maps
+    //Create permission and power maps/representations.
     let ex_event_names : Vec<String> = get_names_from_block(parse, "exevents");
     let in_event_names : Vec<String> = get_names_from_block(parse, "inevents");
 
     let ex_events = get_types_from_block(parse, "exevents", &ex_event_names);
+    let in_events = get_types_from_block(parse, "inevents", &in_event_names);
 
+    //Explain what we're doing.
+    ret.push(string_to_code_line(format!("//Permissions and empowerments.")));
+    ret.push(string_to_code_line(format!("//Exogenous events.")));
+
+    //For each name, get its associate types. Then for each type, create a boolean that
+    //indicates either wildcard is on or a specific relationship.
+    //Have one for both permission and power.
     for name in ex_event_names {
         let types = ex_events.get(&name).expect("Missing type map for exevent.");
         let mut pos = 0;
         for t in types {
-            ret.push(string_to_code_line(format!("bool {}_wildcard_on_{} = false;", name, pos)));
+            ret.push(string_to_code_line(format!("bool {}_perm_wildcard_on_{} = false;", name, pos)));
+            ret.push(string_to_code_line(format!("bool {}_pow_wildcard_on_{} = false;", name, pos)));
+            //Now do full lists.
+            let map_from : String = match type_map.get(t) {
+                Some(s) => s.clone(),
+                None => panic!("No value for type {} in type map.", t),
+            };
+
+            ret.push(string_to_code_line(format!("mapping ({} => boolean) private {}_perm_map_on_{};", map_from, name, pos)));
+            ret.push(string_to_code_line(format!("mapping ({} => boolean) private {}_pow_map_on_{};", map_from, name, pos)));
             pos += 1;
         }
     }
+    //Insert an empty line.
+    ret.push(string_to_code_line(format!("")));
 
-    //Permissions and powers.
-    //Wildcards must be irrelevant here.
-    //println!("initials");
-    let mut loop_it = 0;
-    loop {
-        let parse_initials = format!("{}", parse["contents"]["initials"][loop_it]);
-        loop_it+=1;
-        if parse_initials == "null"{
-            break;
-        } else {
-            //println!("{}", parse_initials);
+    ret.push(string_to_code_line(format!("//Inst events.")));
+    //Repeat for inevents.
+    for name in in_event_names {
+        let types = in_events.get(&name).expect("Missing type map for exevent.");
+        let mut pos = 0;
+        for t in types {
+            ret.push(string_to_code_line(format!("bool {}_perm_wildcard_on_{} = false;", name, pos)));
+            ret.push(string_to_code_line(format!("bool {}_pow_wildcard_on_{} = false;", name, pos)));
+            //Now do full lists.
+            let map_from : String = match type_map.get(t) {
+                Some(s) => s.clone(),
+                None => panic!("No value for type {} in type map.", t),
+            };
+
+            ret.push(string_to_code_line(format!("mapping ({} => boolean) private {}_perm_map_on_{};", map_from, name, pos)));
+            ret.push(string_to_code_line(format!("mapping ({} => boolean) private {}_pow_map_on_{};", map_from, name, pos)));
+            pos += 1;
         }
     }
+    ret.push(string_to_code_line(format!("")));
 
     return ret;
 }
@@ -275,7 +303,7 @@ fn generate_creation_fun(parse: &Value, init_map : HashMap<String, String>) -> V
     create_contract.remove(0);
     create_contract.trim();
 
-    let begin : String = format!("contract {} {{", inst_name);
+    let begin : String = format!("function {} {{", inst_name);
     let end : String = String::from("}");
 
     let def = ContractElement {
@@ -284,6 +312,58 @@ fn generate_creation_fun(parse: &Value, init_map : HashMap<String, String>) -> V
         is_block : true,
     };
     ret.push(def);
+
+    //Permissions and powers.
+    //TODO Unclean code. This should be passed to this function.
+    //Create permission and power maps/representations.
+    let ex_event_names : Vec<String> = get_names_from_block(parse, "exevents");
+    let in_event_names : Vec<String> = get_names_from_block(parse, "inevents");
+
+    let ex_events = get_types_from_block(parse, "exevents", &ex_event_names);
+    let in_events = get_types_from_block(parse, "inevents", &in_event_names);
+
+    //Wildcards must be irrelevant here.
+    let mut loop_it = 0;
+    loop {
+        let parse_initials = format!("{}", parse["contents"]["initials"][loop_it]);
+        loop_it+=1;
+        if parse_initials == "null"{
+            break;
+        } else {
+            //Dissasemble output using regex. We want everything in quote marks...
+            //TODO NO support for conditionals. Here is where it would go.
+            let re = Regex::new("\"(.*?)\"").unwrap();
+            let mut iter = re.captures_iter(&parse_initials);
+            let cap : Captures = match iter.next() {
+                Some(c) => c,
+                None => panic!("Poorly formatted initial"),
+            };
+            //This is the type - either perm or pow.
+            let init_type : String = String::from(cap.get(1).unwrap().as_str());
+            let cap : Captures = match iter.next() {
+                Some(c) => c,
+                None => panic!("Poorly formatted initial"),
+            };
+            //This is the name of the event which we use.
+            let event_name : String = String::from(cap.get(1).unwrap().as_str());
+
+            //Generate code lines.
+            ret.push(string_to_code_line(format!("//Set initial wildcards")));
+            //Need to get number of types for name.
+            println!("{}", event_name);
+            let num_types : usize = match ex_events.get(&event_name) {
+                Some(v) => v.len(),
+                None => match in_events.get(&event_name) {
+                    Some(v) => v.len(),
+                    None => panic!("Poorly formed initial statement."),
+                }
+            };
+
+            for i in 0..num_types{
+                ret.push(string_to_code_line(format!("{}_{}_wildcard_on_{} = true;", event_name, init_type, i)));
+            }
+        }
+    }
 
     return ret;
 }
@@ -316,10 +396,12 @@ fn generate_contract_code(parse : &Value,
     println!("End type mappings.\n");
 
     //Step 3 - Global
-    contract.append(&mut generate_global_elements(parse));
+    contract.append(&mut generate_global_elements(parse, type_map));
 
     //Step 4 - Contract Creation function.
     contract.append(&mut generate_creation_fun(parse, init_map));
+
+    //Step 5 - Generate functions.
 
     return contract;
 }
@@ -371,5 +453,14 @@ fn main() {
     let contract = generate_contract_code(&parse, type_map_file_path);
     let output = contract_to_string(contract);
 
-    println!("{}", output);
+    //https://rustbyexample.com/std_misc/file/create.html
+    let out_path = Path::new("o.sol");
+    let mut out_file : File = match File::create(&out_path) {
+        Err(why) => panic!("Could not create out file: {}", why),
+        Ok(out_file) => out_file,
+    };
+    match out_file.write_all(output.as_bytes()) {
+        Err(why) => panic!("Couldn't write to out file: {}", why),
+        Ok(_) => println!("Done."),
+    }
 }
