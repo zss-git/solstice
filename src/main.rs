@@ -356,9 +356,12 @@ fn generate_global_elements(parse: &Value, type_map: &HashMap<String, String>) -
     ret.push(string_to_code_line(format!("")));
     ret.push(string_to_code_line(format!("//Fluents")));
 
+    //TODO FULL FLUENT SUPPORT NOT IMPLEMENTED.
     let fluent_names : Vec<String> = get_names_from_block(parse, "fluents");
+    //let fluents = get_types_from_block(parse, "fluents", &fluent_names);
+
     for name in fluent_names {
-        ret.push(string_to_code_line(format!("bool {} = false;", name)));
+        ret.push(string_to_code_line(format!("mapping(address => bool) public {};", name)));
     }
 
     ret.push(string_to_code_line(format!("")));
@@ -499,7 +502,7 @@ fn fetch_relationship_from_parse(parse: &Value, relationship: &str) -> Vec<Vec<V
     return vecs;
 }
 
-fn generate_function(parse: &Value, type_map: &HashMap<String, String>, function_name: String, events: &HashMap<String, Vec<String>>, public : bool) -> Vec<ContractElement> {
+fn generate_function(parse: &Value, type_map: &HashMap<String, String>, function_name: String, events: &HashMap<String, Vec<String>>, generates : &Vec<Vec<Vec<String>>>, initiates : &Vec<Vec<Vec<String>>>, public : bool) -> Vec<ContractElement> {
     let mut ret : Vec<ContractElement> = Vec::new();
 
     //For arguments - indexes all live in the same place, so this is how we keep track.
@@ -546,8 +549,9 @@ fn generate_function(parse: &Value, type_map: &HashMap<String, String>, function
     ret.push(def);
 
     let mut require : String = format!("require((");
-    //Permissions and empowerment guards.
-    //Ok I kind of ignore empowerements...
+    //Step 2 - Permissions and empowerment guards.
+    //TODO Ok I kind of ignore empowerements... They're not that important really.
+    //of course that means it isn't semantically correct, but it probably isnt anyway.
     //Wildcards.
     for i in 0..num_args {
         if i == num_args-1 {
@@ -568,6 +572,95 @@ fn generate_function(parse: &Value, type_map: &HashMap<String, String>, function
     require += "));";
     ret.push(string_to_code_line(require));
 
+    //Step 3 - Initiates
+    //a statement like:
+    //balance_up(U) initiates has_money(U);
+    //is a line consisting of words (e.g. balance_up(U)) consisting of elements
+    //(e.g. balance_up, U)
+    //The choice of data structure here is obv bad, but I'm not changing it now.
+    //
+    //TODO DON'T use 3 dimensional data structures with no plan please.
+    //
+    //TODO This code is HORRIBLE. Good competitor for the worst code I've ever written.\
+    //Needs serious refactoring.
+    //Suspect rust matching could make this cleaner.
+    for line_idx in 0..initiates.len() {
+        //Fetch line
+        let line = initiates.get(line_idx).unwrap();
+
+        //Used for matching args in this line.
+        let mut match_args : Vec<String> = Vec::new();
+
+        //Look per word.
+        for word_idx in 0..line.len() {
+            let word = line.get(word_idx).unwrap();
+            //The first word in a block determines if this function initiates
+            //the following words..
+            if word_idx == 0 {
+                //Check if relevant, else break and ignore the rest of this line
+                if word.get(0).unwrap() == &function_name {
+                    //'Match_args' are simply the args of the head.
+                    match_args = word.clone();
+                    match_args.remove(0); //Remove the function name, its now irrelevant.
+                } else {
+                    break;
+                }
+            } else {
+                //Here is where we do the code generation.
+                //We only ever reach this branch for a word IF it is called by this function.
+                //TODO Strip out conditionals.
+                if word.len() == 0 {
+                    //Not sure why we need this...
+                    break;
+                }
+
+                let first_element = word.get(0).unwrap();
+                let second_element = word.get(1).unwrap();
+                let mut element_args : Vec<String> = Vec::new();
+
+                if first_element == "perm" || first_element == "pow" {
+                    element_args = word.clone();
+                    element_args.remove(0);
+                    element_args.remove(0);
+                    //TODO Need to add perm/pow support.
+                    break;
+                } else {
+                    //'Initiates'
+                    element_args = word.clone();
+                    element_args.remove(0);
+                    let mut out_line : String = format!("{}[", first_element);
+                    //TODO Put this code into a function so we can reuse it later.
+                    for arg_idx in 0..element_args.len() {
+                        let cur_arg = element_args.get(arg_idx).unwrap();
+                        //Index through the head args
+                        let mut match_pos = 99;
+                        for match_arg_idx in 0..match_args.len() {
+                            let cur_match_arg = match_args.get(match_arg_idx).unwrap();
+                            if cur_arg == cur_match_arg {
+                                match_pos = match_arg_idx;
+                                break;
+                            }
+                        }
+                        let matched_argument = my_args.get(match_pos).expect("Initiates isn't callable!!!");
+                        out_line += &format!("{}", matched_argument);
+                    }
+                    out_line += "] = true;";
+                    ret.push(string_to_code_line(out_line));
+                }
+
+                /*for j in word {
+                    println!("{}", j);
+                }
+                println!("end word");*/
+
+            }
+            ret.push(string_to_code_line(format!("")));
+        }
+    }
+
+    //Step 4 - Generates
+    //Step 5 - Terminates
+
     return ret;
 }
 
@@ -581,11 +674,11 @@ fn generate_functions(parse: &Value, type_map : &HashMap<String, String>, genera
     let in_events = get_types_from_block(parse, "inevents", &in_event_names);
 
     for event in in_event_names {
-        ret.append(&mut generate_function(parse, type_map, event, &in_events, false));
+        ret.append(&mut generate_function(parse, type_map, event, &in_events, generates,initiates, false));
         ret.push(string_to_code_line(String::from("")));
     }
     for event in ex_event_names {
-        ret.append(&mut generate_function(parse, type_map, event, &ex_events, true));
+        ret.append(&mut generate_function(parse, type_map, event, &ex_events, generates,initiates, true));
         ret.push(string_to_code_line(String::from("")));
     }
 

@@ -39,7 +39,7 @@ contract my_bux {
   mapping (address => bool) private inst_transfer_pow_map_on_1;
   
   //Fluents
-  bool has_money = false;
+  mapping(address => bool) public has_money;
   
   function my_bux(address a) public {
     //Function calls for initial 'create_contract' event.
@@ -52,9 +52,13 @@ contract my_bux {
   function balance_up(address a) private view {
     require((balance_up_perm_wildcard_on_0 == true) || (balance_up_perm_map_on_0[a] == true));
     
+    has_money[a] = true;
+    
+    
   }
   function inst_creation(address a) private view {
     require((inst_creation_perm_wildcard_on_0 == true) || (inst_creation_perm_map_on_0[a] == true));
+    
     
   }
   function inst_transfer(address a, address b) private view {
