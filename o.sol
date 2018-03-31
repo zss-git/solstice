@@ -48,29 +48,43 @@ contract my_bux {
   function balance_down(address a) private view {
     require((balance_down_perm_wildcard_on_0 == true) || (balance_down_perm_map_on_0[a] == true));
     
+    
   }
   function balance_up(address a) private view {
     require((balance_up_perm_wildcard_on_0 == true) || (balance_up_perm_map_on_0[a] == true));
-    
     has_money[a] = true;
     
     
   }
   function inst_creation(address a) private view {
     require((inst_creation_perm_wildcard_on_0 == true) || (inst_creation_perm_map_on_0[a] == true));
+    transfer_perm_wildcard_on_0 = true;
+    transfer_perm_wildcard_on_1 = true;
+    transfer_pow_wildcard_on_0 = true;
+    transfer_pow_wildcard_on_1 = true;
+    inst_transfer_perm_wildcard_on_0 = true;
+    inst_transfer_perm_wildcard_on_1 = true;
     
     
   }
   function inst_transfer(address a, address b) private view {
     require((inst_transfer_perm_wildcard_on_0 == true && inst_transfer_perm_wildcard_on_1 == true) || (inst_transfer_perm_map_on_0[a] == true && inst_transfer_perm_map_on_1[b] == true));
     
+    
   }
   function create_contract(address a) public view {
     require((create_contract_perm_wildcard_on_0 == true) || (create_contract_perm_map_on_0[a] == true));
+    
     
   }
   function transfer(address a, address b) public view {
     require((transfer_perm_wildcard_on_0 == true && transfer_perm_wildcard_on_1 == true) || (transfer_perm_map_on_0[a] == true && transfer_perm_map_on_1[b] == true));
     
+    
   }
+}
+}
+}
+}
+}
 }
