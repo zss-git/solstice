@@ -174,7 +174,6 @@ Get names from blocks that are formatted like
 fn get_names_from_block(parse: &Value, block: &str) -> Vec<String> {
     let parse_str = format!("{}", parse["contents"][block]);
     let parse_str = parse_str.replace("{", "!");
-    println!("Parse string: {}", parse_str);
 
     let mut names : Vec<String> = Vec::new();
     //let re = Regex::new("[,{{]\"(.*?)\":").unwrap();
@@ -376,14 +375,18 @@ fn generate_global_elements(parse: &Value,
     ret.push(string_to_code_line(format!("")));
     ret.push(string_to_code_line(format!("//Fluents")));
 
-    //TODO FULL FLUENT SUPPORT NOT IMPLEMENTED.
     let fluent_names : Vec<String> = get_names_from_block(parse, "fluents");
-    //let fluents = get_types_from_block(parse, "fluents", &fluent_names);
-
+    let fluent_types : HashMap<String, Vec<String>> = get_types_from_block(parse,
+                                                                           "fluents",
+                                                                           &fluent_names);
     for name in fluent_names {
-        ret.push(string_to_code_line(format!("mapping(address => bool) public {};", name)));
+        let args = fluent_types.get(&name).expect("Fluent doesn't exist");
+        for arg_idx in 0..args.len() {
+            ret.push(string_to_code_line(format!("mapping(address => bool) public {}_{};",
+                                                 name,
+                                                 arg_idx)));
+        }
     }
-
     ret.push(string_to_code_line(format!("")));
 
     return ret;
@@ -392,7 +395,12 @@ fn generate_global_elements(parse: &Value,
 /*
 Generate the contract creation function.
 */
-fn generate_creation_fun(parse: &Value, type_map : &HashMap<String, String>, generates : &Vec<Vec<Vec<String>>>) -> Vec<ContractElement> {
+fn generate_creation_fun(parse: &Value,
+                         type_map: &HashMap<String, String>,
+                         generates: &Vec<Vec<Vec<String>>>,
+                         init_map: &HashMap<String, String>,
+                         static_first: bool)
+                         -> Vec<ContractElement> {
     let mut ret = Vec::new();
 
     let inst_name = institution_name_to_string(parse);
@@ -405,14 +413,17 @@ fn generate_creation_fun(parse: &Value, type_map : &HashMap<String, String>, gen
 
     let mut begin : String = format!("function {}(", inst_name);
 
-    for n in ex_event_names {
-        println!("exeventname: {}", n);
-    }
-
     //This char_num nonsense counts from a-z
     let mut char_num = 10;
-    for typ in ex_events.get("create_contract").expect("No create contract function") {
-        begin += &format!("{} {}", type_map.get(typ).expect("Error with type map"), char::from_digit(char_num, 36).unwrap());
+    let types = ex_events.get("create_contract").expect("No create contract function");
+
+    let first_arg_type = types.get(0).unwrap();
+    for typ in types {
+        if !static_first {
+            begin += &format!("{} {}",
+                              type_map.get(typ).expect("Error with type map"),
+                              char::from_digit(char_num, 36).unwrap());
+        }
         char_num += 1;
     }
 
@@ -425,7 +436,7 @@ fn generate_creation_fun(parse: &Value, type_map : &HashMap<String, String>, gen
         tail : end,
         is_block : true,
         is_below : false,
-        unindent_after: false ,
+        unindent_after: false,
     };
     ret.push(def);
 
@@ -452,7 +463,11 @@ fn generate_creation_fun(parse: &Value, type_map : &HashMap<String, String>, gen
                     let mut char_num = 10;
                     for head_arg in &head_block {
                         if arg == head_arg {
-                            fun_call += &format!("{}", char::from_digit(char_num, 36).unwrap());
+                            if char_num == 10 && static_first {
+                                fun_call += &format!("{}", init_map.get(first_arg_type).unwrap());
+                            } else {
+                                fun_call += &format!("{}", char::from_digit(char_num, 36).unwrap());
+                            }
                         }
                         char_num +=1;
                     }
@@ -495,7 +510,6 @@ fn fetch_relationship_from_parse(parse: &Value, relationship: &str) -> Vec<Vec<V
         let mut loop_vec : Vec<Vec<String>> = Vec::new();
         let cur_parse = &parse["contents"][relationship][i];
         let check : String = format!("{}", cur_parse);
-        //println!("Checkisat: {}", check);
 
         if check == "null" {
             break;
@@ -503,10 +517,8 @@ fn fetch_relationship_from_parse(parse: &Value, relationship: &str) -> Vec<Vec<V
             loop {
                 let cur_s : String = format!("{}", cur_parse[j]);
                 if cur_s == "null" {
-                    //println!("Breaking loop");
                     break;
                 } else {
-                    //println!("sisat: {}", s);
                     loop_vec.push(strip_parse_structure(cur_s));
                     j += 1;
                 }
@@ -520,14 +532,15 @@ fn fetch_relationship_from_parse(parse: &Value, relationship: &str) -> Vec<Vec<V
     return vecs;
 }
 
-fn generate_function(parse: &Value,
-                     type_map: &HashMap<String, String>,
+fn generate_function(type_map: &HashMap<String, String>,
+                     init_map: &HashMap<String, String>,
                      function_name: String,
                      events: &HashMap<String, Vec<String>>,
                      generates: &Vec<Vec<Vec<String>>>,
                      initiates: &Vec<Vec<Vec<String>>>,
                      terminates: &Vec<Vec<Vec<String>>>,
-                     public: bool)
+                     public: bool,
+                     static_first: bool,)
                      -> Vec<ContractElement> {
 
     let mut ret : Vec<ContractElement> = Vec::new();
@@ -550,7 +563,12 @@ fn generate_function(parse: &Value,
     let mut begin : String = format!("function {}(", function_name);
     //Generate rest of begin statement for block:
     //This includes all argument definitions.
-    for i in 0..my_args.len(){
+    //Skip the first arg if appropriate.
+    let arg_start_idx = match (static_first && public) {
+        true => 1,
+        false => 0,
+    };
+    for i in arg_start_idx..my_args.len(){
         let cur_arg = my_args.get(i).unwrap();
         let cur_type = arg_types.get(i).unwrap();
         let cur_sol_type = type_map.get(cur_type).unwrap();
@@ -577,32 +595,26 @@ fn generate_function(parse: &Value,
     };
     ret.push(def);
 
-    let mut require : String = format!("require((");
+    //Handle static first.
+    if static_first && public {
+        let static_arg = my_args.get(0).unwrap();
+        let static_type = arg_types.get(0).unwrap();
+        let static_sol_type = type_map.get(static_type).unwrap();
+        let static_init = init_map.get(static_type).unwrap();
+        ret.push(string_to_code_line(format!("{} {} = {};",
+                                             static_sol_type,
+                                             static_arg,
+                                             static_init)));
+    }
+
     //Step 2 - Permissions and empowerment guards.
-    //TODO Ok I kind of ignore empowerements...
-    //Wildcards.
-    for i in 0..num_args {
-        if i == num_args-1 {
-            require += &format!("{}_perm_wildcard_on_{} == true", function_name, i);
-        } else {
-            require += &format!("{}_perm_wildcard_on_{} == true && ", function_name, i);
-        }
-    }
-    //Maps
-    require += ") || (";
-    for i in 0..num_args {
-        let cur_arg = my_args.get(i).unwrap();
-        if i == num_args-1 {
-            require += &format!("{}_perm_map_on_{}[{}] == true", function_name, i, cur_arg);
-        } else {
-            require += &format!("{}_perm_map_on_{}[{}] == true && ", function_name, i, cur_arg);
-        }
-    }
-    require += "));";
-    ret.push(string_to_code_line(require));
+    ret.append(&mut generate_function_guards(function_name.clone(),
+                                             num_args,
+                                             &my_args,
+                                             public));
 
     //Step 3 - Initiates
-    //TODO Can you initiate a fluent and permissions in the same function? Probs no.
+    //TODO Can you initiate a fluent and permissions in the same function? Probs no
     ret.append(&mut generate_function_initiates_terminates(function_name.clone(),
                                                             &my_args,
                                                             initiates,
@@ -617,6 +629,39 @@ fn generate_function(parse: &Value,
                                                            terminates,
                                                            true));
 
+    return ret;
+}
+
+fn generate_function_guards(function_name: String,
+                            num_args: usize,
+                            my_args: &Vec<String>,
+                            is_exo: bool)
+                            -> Vec<ContractElement> {
+
+    let mut ret: Vec<ContractElement> = Vec::new();
+    let mut require : String = format!("require(");
+
+    //Wildcards/maps
+    for i in 0..num_args {
+        let cur_arg = my_args.get(i).unwrap();
+        if is_exo {
+            require +=
+                &format!("(({}_perm_wildcard_on_{} || {}_perm_map_on_{}[{}]) && ({}_pow_wildcard_on_{} || {}_pow_map_on_{}[{}])) && ",
+                         function_name, i,
+                         function_name, i, cur_arg,
+                         function_name, i,
+                         function_name, i, cur_arg);
+        } else {
+            require +=
+                &format!("({}_perm_wildcard_on_{} || {}_perm_map_on_{}[{}]) && ",
+                         function_name, i,
+                         function_name, i, cur_arg);
+        }
+    }
+    require.pop(); require.pop(); require.pop(); require.pop();
+    require += ");";
+
+    ret.push(string_to_code_line(require));
     return ret;
 }
 
@@ -668,7 +713,8 @@ fn generate_function_generates(function_name: String,
             }
             //TODO Fix IF nesting,
             let mut start: String = format!("if(");
-            for arg in conditional_args {
+            for arg_idx in 0..conditional_args.len() {
+                let arg = conditional_args.get(arg_idx).unwrap().clone();
                 //Matching.
                 let mut match_idx = 99;
                 //Find corresponding index.
@@ -681,16 +727,19 @@ fn generate_function_generates(function_name: String,
                 //TODO Needs generalising and modifying if we want full fluent support.
                 if match_idx < 99 {
                     if negation == true {
-                        start += &format!("!{}[{}]",
+                        start += &format!("!{}_{}[{}] && ",
                                           conditional,
+                                          arg_idx,
                                           function_args.get(match_idx).expect("??"));
                     } else {
-                        start += &format!("{}[{}]",
+                        start += &format!("{}_{}[{}] && ",
                                           conditional,
+                                          arg_idx,
                                           function_args.get(match_idx).expect("??"));
                     }
                 }
             }
+            start.pop();start.pop();start.pop();start.pop();
             start += "){";
             let begin: String = start;
             let end: String = format!("}}");
@@ -795,6 +844,7 @@ fn generate_function_generates(function_name: String,
 
 /*
 Generates the initiates and terminates calls inside a function.
+TODO Solstice pattern matching needs rewriting as it does not support matching in body.
 */
 fn generate_function_initiates_terminates(function_name: String,
                                           function_args: &Vec<String>,
@@ -923,13 +973,16 @@ fn generate_function_initiates_terminates(function_name: String,
                                 break;
                             }
                         }
-                        let mut out_line : String;
+                        let mut out_line : String = String::from("");
                         let matched_argument = function_args.get(match_pos)
                             .expect("Initiates/terminates isn't callable!!!");
-                        out_line = format!("{}[{}] = {};",
-                                           first_element,
-                                           matched_argument,
-                                           set_to);
+                        for arg_idx in 0..element_args.len() {
+                            out_line = format!("{}_{}[{}] = {};",
+                                              first_element,
+                                              arg_idx,
+                                              matched_argument,
+                                              set_to);
+                        }
                         ret.push(string_to_code_line(out_line));
                     }
                 }
@@ -941,9 +994,11 @@ fn generate_function_initiates_terminates(function_name: String,
 
 fn generate_functions(parse: &Value,
                       type_map: &HashMap<String, String>,
+                      init_map: &HashMap<String, String>,
                       generates: &Vec<Vec<Vec<String>>>,
                       initiates: &Vec<Vec<Vec<String>>>,
-                      terminates: &Vec<Vec<Vec<String>>>)
+                      terminates: &Vec<Vec<Vec<String>>>,
+                      static_first: bool)
                       -> Vec<ContractElement> {
 
     let mut ret: Vec<ContractElement> = Vec::new();
@@ -955,16 +1010,16 @@ fn generate_functions(parse: &Value,
     let in_events = get_types_from_block(parse, "inevents", &in_event_names);
 
     for event in in_event_names {
-        ret.append(&mut generate_function(parse, type_map,
+        ret.append(&mut generate_function(type_map, init_map,
                                           event, &in_events,
                                           generates, initiates,
-                                          terminates, false));
+                                          terminates, false, static_first));
     }
     for event in ex_event_names {
-        ret.append(&mut generate_function(parse, type_map,
+        ret.append(&mut generate_function(type_map, init_map,
                                           event, &ex_events,
                                           generates,initiates,
-                                          terminates, true));
+                                          terminates, true, static_first));
     }
 
     return ret;
@@ -1012,9 +1067,17 @@ fn generate_violates(parse: &Value,
 }
 /*
 Generate final contract code.
+
+Set 'static_first' to true if you wish to set the first argument using the init map, for exo
+functions.
+
+This is useful to make sure that the 'caller' of an exogenous event function is always
+the literal caller in solidity, for example.
+If this is not set, it will have to be done manually AFTER code generation.
 */
 fn generate_contract_code(parse : &Value,
-                          type_map_file_path : String)
+                          type_map_file_path : String,
+                          static_first: bool)
                           -> Vec<ContractElement>{
 
     let mut contract = Vec::new();
@@ -1036,16 +1099,6 @@ fn generate_contract_code(parse : &Value,
     let init_map : HashMap<String, String> = maps.pop().unwrap();
     let type_map : HashMap<String, String> = maps.pop().unwrap();
 
-    println!("Type mappings are as follows:");
-    for t in types{
-        //Error handling if there is no match.
-        match type_map.get(&t) {
-            Some(st) => println!("{} -> {}", t, st),
-            None => panic!("No match for type {} in map file.", t)
-        }
-    }
-    println!("End type mappings.\n");
-
     //Step 3 - Global
     contract.append(&mut generate_global_elements(parse, &type_map));
 
@@ -1053,12 +1106,13 @@ fn generate_contract_code(parse : &Value,
     contract.append(&mut generate_violates(parse, &type_map));
 
     //Step 5 - Contract Creation function.
-    contract.append(&mut generate_creation_fun(parse, &type_map, &generates));
+    contract.append(&mut generate_creation_fun(parse, &type_map, &generates,
+                                               &init_map, static_first));
 
     //Step 6 - Generate functions.
-    contract.append(&mut generate_functions(parse, &type_map,
+    contract.append(&mut generate_functions(parse, &type_map, &init_map,
                                             &generates, &initiates,
-                                            &terminates));
+                                            &terminates, static_first));
     return contract;
 }
 
@@ -1171,7 +1225,7 @@ fn main() {
     let json_file_path = String::from("parse.json");
     let parse = get_json_parse(json_file_path);
 
-    let contract = generate_contract_code(&parse, type_map_file_path);
+    let contract = generate_contract_code(&parse, type_map_file_path, true);
     let output = contract_to_string(contract);
 
     //https://rustbyexample.com/std_misc/file/create.html
