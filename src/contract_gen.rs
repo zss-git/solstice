@@ -213,7 +213,8 @@ fn generate_global_elements(parse: &Value,
     for name in fluent_names {
         let args = fluent_types.get(&name).expect("Fluent doesn't exist");
         for arg_idx in 0..args.len() {
-            ret.push(code_line_from_string(format!("mapping(address => bool) public {}_{};",
+            ret.push(code_line_from_string(format!("mapping({} => bool) public {}_{};",
+                                                 type_map.get(args.get(arg_idx).unwrap()).unwrap(),
                                                  name,
                                                  arg_idx)));
         }
