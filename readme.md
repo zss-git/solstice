@@ -1,5 +1,5 @@
 # SOLSTICE
-## SOLidity Specification Translated from an Instal Contract Expression
+## SOLidity Specification Translated from an InstAL Contract Expression
 ### What is this?
 This is a 'programming code translator' written in Rust. It translates an InstAL specification to Solidity for the EVM.
 ### What is InstAL?
